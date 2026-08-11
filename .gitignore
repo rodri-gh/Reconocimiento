@@ -1,0 +1,29 @@
+# Entorno / secretos
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# PocketBase local
+infra/pocketbase/pb_data/
+infra/pocketbase/pb_public/
+infra/pocketbase/pocketbase.exe
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# IDE / SO
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Datos locales
+*.log

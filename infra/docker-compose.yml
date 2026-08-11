@@ -1,0 +1,46 @@
+# Despliegue de la demo (Fase 4). Requiere Docker en el servidor.
+# Uso: docker compose -f infra/docker-compose.yml up -d
+services:
+  pocketbase:
+    image: ghcr.io/muchobien/pocketbase:latest
+    container_name: pocketbase
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    volumes:
+      - pb_data:/pb/pb_data
+      - pb_public:/pb/pb_public
+    environment:
+      PB_ENCRYPTION_KEY: ${PB_ENCRYPTION_KEY:-}
+    command: pocketbase serve --http=0.0.0.0:8090
+
+  backend:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    container_name: backend
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - pocketbase
+
+  caddy:
+    image: caddy:2
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+      - ./Caddyfile:/etc/caddy/Caddyfile
+
+volumes:
+  pb_data:
+  pb_public:
+  caddy_data:
+  caddy_config:

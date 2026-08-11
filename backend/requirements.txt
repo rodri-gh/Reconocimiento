@@ -1,0 +1,15 @@
+# Fase 1: API + gestión de cámaras
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.8
+pydantic-settings>=2.4
+requests>=2.32
+cryptography>=43.0
+python-multipart>=0.0.9
+opencv-python-headless>=4.10
+
+# Fase 2: YOLO + tracking + OCR
+ultralytics>=8.2
+supervision>=0.24,<0.31
+numpy>=1.26
+easyocr>=1.7

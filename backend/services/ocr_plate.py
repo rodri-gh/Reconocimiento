@@ -32,12 +32,12 @@ class PlateReader:
             with self._lock:
                 if self._reader is None:
                     try:
-                        import easyocr
+                        from fast_plate_ocr import LicensePlateRecognizer
 
-                        logger.info("Cargando EasyOCR (CPU)...")
-                        self._reader = easyocr.Reader(["es", "en"], gpu=False, verbose=False)
+                        logger.info("Cargando fast-plate-ocr (CPU)...")
+                        self._reader = LicensePlateRecognizer("cct-s-v2-global-model")
                     except Exception:
-                        logger.exception("No se pudo inicializar EasyOCR; OCR desactivado")
+                        logger.exception("No se pudo inicializar fast-plate-ocr; OCR desactivado")
                         self.enabled = False
                         self._reader = None
         return self._reader
@@ -148,107 +148,30 @@ class PlateReader:
             return "SIN_PLACA_DETECTADA", None, 0.0
         try:
             region, located, offset = self._crop_plate_region(crop)
+            if not located or region.size == 0:
+                # Si no se localizó la placa con el modelo YOLO, usamos el crop completo
+                region = crop
+                offset = (0, 0, crop.shape[1], crop.shape[0])
 
-            # --- CORRECCIÓN DE PERSPECTIVA (DESKEWING) ---
-            if located and region.size > 0:
-                try:
-                    # Convertir a escala de grises
-                    plate_gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-                    # Umbralizado para aislar caracteres
-                    _, thresh = cv2.threshold(plate_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-                    # Encontrar coordenadas de píxeles activos (caracteres)
-                    coords = np.column_stack(np.where(thresh > 0))
-                    if coords.size > 0:
-                        # Encontrar el rectángulo rotado mínimo de las características
-                        rect = cv2.minAreaRect(coords)
-                        angle = rect[-1]
-                        
-                        # Normalizar el ángulo de rotación
-                        if angle < -45:
-                            angle = -(90 + angle)
-                        else:
-                            angle = -angle
-                        
-                        # Rotar el recorte si tiene inclinación moderada y corregible
-                        if 1.0 < abs(angle) < 25.0:
-                            (h_reg, w_reg) = region.shape[:2]
-                            center = (w_reg // 2, h_reg // 2)
-                            M = cv2.getRotationMatrix2D(center, angle, 1.0)
-                            region = cv2.warpAffine(region, M, (w_reg, h_reg), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
-                except Exception:
-                    logger.exception("Fallo al corregir perspectiva de la placa")
+            # Inferencia con fast-plate-ocr (espera un ndarray y devuelve una lista de resultados)
+            preds = reader.run(region, return_confidence=True)
+            if not preds:
+                return "SIN_PLACA_DETECTADA", None, 0.0
 
-            processed = self._preprocess_region(region)
-            scale = processed.shape[1] / max(1, region.shape[1])
-            gray = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)
-            h, w = gray.shape[:2]
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-            enhanced = clahe.apply(gray)
+            pred = preds[0]
+            text = pred.plate
             
-            # Usamos el color original (processed) y el gris mejorado (enhanced).
-            # Evitamos la binarización (threshold) ya que destruye detalles y confunde al OCR en CPU.
-            variants = (processed, enhanced)
-            best: tuple[str, float, tuple[int, int, int, int] | None] = ("SIN_PLACA_DETECTADA", 0.0, None)
-            
-            for variant in variants:
-                results = reader.readtext(
-                    variant,
-                    allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-                    detail=1,
-                    paragraph=False,
-                    width_ths=0.7,  # Unir bloques de texto cercanos (como espacios en la placa)
-                )
-                if not results:
-                    continue
+            # Obtener probabilidad de los caracteres
+            if hasattr(pred, "char_probs") and pred.char_probs is not None and len(pred.char_probs) > 0:
+                ocr_prob = float(np.mean(pred.char_probs))
+            else:
+                ocr_prob = float(getattr(pred, "prob", getattr(pred, "confidence", 1.0)))
 
-                if located:
-                    # El modelo ya localizó la placa: confiamos en la caja del modelo YOLO (offset).
-                    # Ordenamos las partes detectadas de izquierda a derecha.
-                    results_sorted = sorted(results, key=lambda r: min(p[0] for p in r[0]))
-                    valid_parts = []
-                    total_prob = 0.0
-                    for bbox, text, prob in results_sorted:
-                        clean = re.sub(r"[^A-Z0-9]", "", text.upper())
-                        # Aplicar corrección de ortografía LPR
-                        clean = self._correct_plate_spelling(clean)
-                        # Filtramos textos basura vacíos o con muy baja probabilidad
-                        if len(clean) >= 1 and prob >= 0.1:
-                            valid_parts.append(clean)
-                            total_prob += prob
-                    
-                    if valid_parts:
-                        combined_text = "".join(valid_parts)
-                        # Volver a corregir el texto completo concatenado
-                        combined_text = self._correct_plate_spelling(combined_text)
-                        avg_prob = total_prob / len(valid_parts)
-                        # Usamos la caja completa detectada por el modelo YOLO (offset)
-                        local_box = offset
-                        # Priorizar textos más largos si tienen una confianza mínima razonable
-                        if avg_prob > best[1] or (len(combined_text) > len(best[0]) and avg_prob > 0.15):
-                            best = (combined_text, avg_prob, local_box)
-                else:
-                    # Sin modelo: filtros estrictos para evitar falsos positivos.
-                    for bbox, text, prob in results:
-                        clean = re.sub(r"[^A-Z0-9]", "", text.upper())
-                        clean = self._correct_plate_spelling(clean)
-                        if prob < 0.3 or not self._looks_like_plate(clean, require_digit=True):
-                            continue
-                        ratio, ycenter, _ = self._box_metrics(bbox, h, w)
-                        if not (2.0 <= ratio <= 10.0):
-                            continue
-                        if not (0.35 <= ycenter <= 0.95):
-                            continue
-                        xs = [p[0] for p in bbox]
-                        ys = [p[1] for p in bbox]
-                        local_box = (
-                            int(min(xs) / scale + offset[0]),
-                            int(min(ys) / scale + offset[1]),
-                            int(max(xs) / scale + offset[0]),
-                            int(max(ys) / scale + offset[1]),
-                        )
-                        if prob > best[1]:
-                            best = (clean, prob, local_box)
-            return best[0], best[2], best[1]
+            # Limpiar y corregir el texto detectado
+            clean = re.sub(r"[^A-Z0-9]", "", text.upper())
+            clean = self._correct_plate_spelling(clean)
+
+            return clean, offset, ocr_prob
         except Exception:
             logger.exception("Error leyendo placa")
             return "SIN_PLACA_DETECTADA", None, 0.0

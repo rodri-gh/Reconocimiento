@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
 
 const OBJECT_TYPES = ['Todos', 'Auto', 'Moto', 'Bus', 'Camion', 'Persona'];
@@ -403,12 +403,30 @@ function Cameras({ cameras, statuses, onRefresh }) {
     const [busy, setBusy] = useState('');
     const [notice, setNotice] = useState('');
     const [liveCamera, setLiveCamera] = useState(null);
+    const [streamKey, setStreamKey] = useState(Date.now());
     const [form, setForm] = useState({
         name: '',
         rtsp_url: '',
         username: '',
         password: '',
     });
+
+    // When any camera transitions to 'running', bump the stream key
+    // so the <img> src gets a fresh MJPEG connection
+    const prevStatusesRef = useRef({});
+    useEffect(() => {
+        const prev = prevStatusesRef.current;
+        for (const cam of cameras) {
+            const oldState = prev[cam.id]?.status || cam.status || 'idle';
+            const newState = statuses[cam.id]?.status || cam.status || 'idle';
+            if (oldState !== 'running' && newState === 'running') {
+                setStreamKey(Date.now());
+                break;
+            }
+        }
+        prevStatusesRef.current = { ...statuses };
+    }, [statuses, cameras]);
+
     async function action(id, type) {
         if (
             type === 'delete' &&
@@ -435,6 +453,17 @@ function Cameras({ cameras, statuses, onRefresh }) {
                       : `Cámara ${type === 'start' ? 'iniciada' : 'detenida'}.`,
             );
             onRefresh();
+
+            // After starting a camera, poll rapidly until we see 'running'
+            if (type === 'start') {
+                let attempts = 0;
+                const rapidPoll = setInterval(async () => {
+                    attempts++;
+                    await onRefresh();
+                    // Stop after 10 attempts (~15s) or if already running
+                    if (attempts >= 10) clearInterval(rapidPoll);
+                }, 1500);
+            }
         } catch (err) {
             setNotice(err.message);
         } finally {
@@ -552,7 +581,7 @@ function Cameras({ cameras, statuses, onRefresh }) {
                 {cameras.map((camera) => {
                     const state =
                         statuses[camera.id]?.status || camera.status || 'idle';
-                    const liveUrl = `${api.url}/api/cameras/${camera.id}/live.mjpg`;
+                    const liveUrl = `${api.url}/api/cameras/${camera.id}/live.mjpg?t=${streamKey}`;
                     return (
                         <div className="camera-card panel" key={camera.id}>
                             <div className="camera-card-top">

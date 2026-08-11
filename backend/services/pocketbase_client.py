@@ -198,3 +198,24 @@ class PocketBaseClient:
         resp = self._request("DELETE", f"/api/collections/detections/records/{detection_id}")
         if resp.status_code not in (200, 204):
             raise PocketBaseError(f"Eliminar detección {detection_id} falló ({resp.status_code}): {resp.text}")
+
+    def delete_detection_safe(self, detection_id: str) -> bool:
+        """Elimina un registro de detección; retorna True si se eliminó, False si ya no existía (404)."""
+        resp = self._request("DELETE", f"/api/collections/detections/records/{detection_id}")
+        if resp.status_code in (200, 204):
+            return True
+        if resp.status_code == 404:
+            return False  # ya fue eliminado (cascade, concurrencia, etc.)
+        raise PocketBaseError(f"Eliminar detección {detection_id} falló ({resp.status_code}): {resp.text}")
+
+    def delete_all_detections(self) -> int:
+        """Elimina TODOS los registros de detecciones, paginando hasta vaciar la colección."""
+        total_deleted = 0
+        while True:
+            records = self.list_detections({"perPage": 200})
+            if not records:
+                break
+            for r in records:
+                self.delete_detection_safe(r["id"])
+                total_deleted += 1
+        return total_deleted

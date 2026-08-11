@@ -290,10 +290,7 @@ def delete_detection(detection_id: str) -> None:
 @app.delete("/api/detections", status_code=204)
 def delete_all_detections() -> None:
     try:
-        # Recuperar hasta 500 registros para eliminar
-        records = pb.list_detections({"perPage": 500})
-        for r in records:
-            pb.delete_detection(r["id"])
+        pb.delete_all_detections()
     except PocketBaseError as exc:
         raise HTTPException(502, f"Error vaciando historial de detecciones: {exc}") from exc
 

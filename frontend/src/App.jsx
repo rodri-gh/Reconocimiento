@@ -88,12 +88,15 @@ function App() {
 
     async function handleDeleteEvent(id) {
         if (!confirm('¿Estás seguro de eliminar este evento?')) return;
+        setLoading(true);
         try {
             await api.deleteDetection(id);
             setSelectedEvent(null);
-            loadData(true);
+            await loadData(false);
         } catch (err) {
             alert(`Error al eliminar: ${err.message}`);
+        } finally {
+            setLoading(false);
         }
     }
 
@@ -104,11 +107,14 @@ function App() {
             )
         )
             return;
+        setLoading(true);
         try {
             await api.deleteAllDetections();
-            loadData(true);
+            await loadData(false);
         } catch (err) {
             alert(`Error al eliminar: ${err.message}`);
+        } finally {
+            setLoading(false);
         }
     }
 
@@ -719,9 +725,17 @@ function Cameras({ cameras, statuses, onRefresh }) {
     );
 }
 
-function Events({ detections, cameras, onSelect, onDeleteAll, limit, onLoadMore }) {
+function Events({
+    detections,
+    cameras,
+    onSelect,
+    onDeleteAll,
+    limit,
+    onLoadMore,
+}) {
     const [type, setType] = useState('Todos');
     const [search, setSearch] = useState('');
+    const [plateOnly, setPlateOnly] = useState(false);
     const filtered = useMemo(
         () =>
             detections.filter(
@@ -730,9 +744,12 @@ function Events({ detections, cameras, onSelect, onDeleteAll, limit, onLoadMore 
                     (!search ||
                         (event.plate_text || '')
                             .toLowerCase()
-                            .includes(search.toLowerCase())),
+                            .includes(search.toLowerCase())) &&
+                    (!plateOnly ||
+                        (event.plate_text &&
+                            event.plate_text !== 'SIN_PLACA_DETECTADA')),
             ),
-        [detections, type, search],
+        [detections, type, search, plateOnly],
     );
     return (
         <section>
@@ -779,6 +796,13 @@ function Events({ detections, cameras, onSelect, onDeleteAll, limit, onLoadMore 
                             {item}
                         </button>
                     ))}
+                    <button
+                        className={
+                            plateOnly ? 'selected plate-filter' : 'plate-filter'
+                        }
+                        onClick={() => setPlateOnly(!plateOnly)}>
+                        Con placa
+                    </button>
                 </div>
             </div>
             <div className="event-gallery">

@@ -900,6 +900,19 @@ nav {
   box-shadow: 0 1px 3px rgba(16, 185, 129, 0.2);
 }
 
+.plate-filter {
+  margin-left: 6px;
+  border-left: 2px solid var(--line) !important;
+  padding-left: 14px !important;
+}
+
+.plate-filter.selected {
+  background: var(--yellow) !important;
+  border-color: var(--yellow) !important;
+  color: #ffffff !important;
+  box-shadow: 0 1px 3px rgba(245, 158, 11, 0.25) !important;
+}
+
 .event-gallery {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(235px, 1fr));

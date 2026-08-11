@@ -209,13 +209,40 @@ class PocketBaseClient:
         raise PocketBaseError(f"Eliminar detección {detection_id} falló ({resp.status_code}): {resp.text}")
 
     def delete_all_detections(self) -> int:
-        """Elimina TODOS los registros de detecciones, paginando hasta vaciar la colección."""
-        total_deleted = 0
+        """Elimina TODOS los registros de detecciones de forma paralela para evitar timeouts."""
+        from concurrent.futures import ThreadPoolExecutor
+        
+        # 1. Recolectar todos los IDs primero para evitar problemas de paginación dinámica
+        all_ids = []
+        page = 1
         while True:
-            records = self.list_detections({"perPage": 200})
-            if not records:
+            resp = self._request("GET", "/api/collections/detections/records", params={
+                "perPage": 500,
+                "page": page,
+                "fields": "id"
+            })
+            if resp.status_code != 200:
+                raise PocketBaseError(f"Listar detecciones para vaciar falló: {resp.text}")
+            data = resp.json()
+            items = data.get("items", [])
+            if not items:
                 break
-            for r in records:
-                self.delete_detection_safe(r["id"])
-                total_deleted += 1
+            all_ids.extend([item["id"] for item in items])
+            if len(items) < 500:
+                break
+            page += 1
+
+        if not all_ids:
+            return 0
+
+        # 2. Borrar en paralelo usando un pool de hilos (hasta 15 trabajadores)
+        total_deleted = 0
+        with ThreadPoolExecutor(max_workers=15) as executor:
+            # Lanzamos todas las tareas de borrado seguro
+            results = executor.map(self.delete_detection_safe, all_ids)
+            # Consumimos el generador para asegurar la ejecución
+            for res in results:
+                if res:
+                    total_deleted += 1
+
         return total_deleted
